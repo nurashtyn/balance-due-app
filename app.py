@@ -41,6 +41,12 @@ TOLLS_SUBTOTAL_REGEX = re.compile(
     re.IGNORECASE
 )
 
+# NEW: Deductions subtotal (Truck expenses)
+DEDUCTIONS_SUBTOTAL_REGEX = re.compile(
+    r"\bDeductions\b.*?\bSubtotal\b\s*:\s*(\(?-?\$?\s*[0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?\)?)",
+    re.IGNORECASE
+)
+
 # Store uploaded PDFs in memory so files persist when switching buttons
 UPLOAD_STORE = {}  # upload_id -> list[{"name": str, "bytes": bytes}]
 
@@ -334,6 +340,7 @@ HTML = """
         <button type="submit" name="action" value="balance" class="actionBtn">Total gross</button>
         <button type="submit" name="action" value="miles" class="actionBtn">Total Miles Driven</button>
         <button type="submit" name="action" value="tolls" class="actionBtn">Tolls</button>
+        <button type="submit" name="action" value="expenses" class="actionBtn">Truck expenses</button>
       </div>
     </form>
   </div>
@@ -363,6 +370,8 @@ HTML = """
                 Miles driven
               {% elif mode == 'tolls' %}
                 Tolls
+              {% elif mode == 'expenses' %}
+                Truck expenses
               {% else %}
                 Balance due
               {% endif %}
@@ -399,6 +408,11 @@ HTML = """
         <h3>Total tolls: ${{ "{:,.2f}".format(total) }}</h3>
         {% if missing > 0 %}
           <p class="bad">Warning: tolls subtotal was not found in {{ missing }} file(s).</p>
+        {% endif %}
+      {% elif mode == 'expenses' %}
+        <h3>Total truck expenses: ${{ "{:,.2f}".format(total) }}</h3>
+        {% if missing > 0 %}
+          <p class="bad">Warning: deductions subtotal was not found in {{ missing }} file(s).</p>
         {% endif %}
       {% else %}
         <h3>Total gross: ${{ "{:,.2f}".format(total) }}</h3>
@@ -752,6 +766,14 @@ def extract_tolls_subtotal_from_bytes(pdf_bytes: bytes):
         return None
     return signed_money_to_float(m.group(1))
 
+# NEW
+def extract_deductions_subtotal_from_bytes(pdf_bytes: bytes):
+    text = extract_text_from_bytes(pdf_bytes)
+    m = DEDUCTIONS_SUBTOTAL_REGEX.search(text)
+    if not m:
+        return None
+    return signed_money_to_float(m.group(1))
+
 MONTH_MAP = {
     "jan": 1, "january": 1,
     "feb": 2, "february": 2,
@@ -951,6 +973,13 @@ def index():
                 missing += 1
             else:
                 total += amt
+        elif action == "expenses":
+            amt = extract_deductions_subtotal_from_bytes(data)
+            results.append({"name": name, "daterange": daterange, "amount": amt})
+            if amt is None:
+                missing += 1
+            else:
+                total += amt
         else:
             amt = extract_balance_due_from_bytes(data)
             results.append({"name": name, "daterange": daterange, "amount": amt})
@@ -959,12 +988,17 @@ def index():
             else:
                 total += amt
 
+    mode = (
+        "expenses" if action == "expenses"
+        else ("tolls" if action == "tolls" else ("miles" if action == "miles" else "balance"))
+    )
+
     return render_template_string(
         HTML,
         results=results,
         total=total,
         missing=missing,
-        mode=("tolls" if action == "tolls" else ("miles" if action == "miles" else "balance")),
+        mode=mode,
         upload_id=upload_id,
         show_no_files=False,
         range_start=range_start_raw,
